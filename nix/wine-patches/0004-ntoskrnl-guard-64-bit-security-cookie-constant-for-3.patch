@@ -1,0 +1,31 @@
+From 38e2995bede2b0661e90df68c245e8dffec8b692 Mon Sep 17 00:00:00 2001
+From: Michael Boterf <michaelboterf@gmail.com>
+Date: Sun, 20 Sep 2026 01:10:10 -0500
+Subject: [PATCH] ntoskrnl: guard 64-bit security-cookie constant for 32-bit
+ build
+
+DEFAULT_SECURITY_COOKIE_64 was defined unconditionally, so on i386 the
+guarded comparisons against a 32-bit ULONG_PTR tripped -Werror=type-limits
+in Proton's build. Define it only under _WIN64; the use sites are already
+#ifdef DEFAULT_SECURITY_COOKIE_64 guarded.
+---
+ dlls/ntoskrnl.exe/ntoskrnl.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/dlls/ntoskrnl.exe/ntoskrnl.c b/dlls/ntoskrnl.exe/ntoskrnl.c
+index e036a6d636e..f6a540171aa 100644
+--- a/dlls/ntoskrnl.exe/ntoskrnl.c
++++ b/dlls/ntoskrnl.exe/ntoskrnl.c
+@@ -54,7 +54,9 @@ typedef struct _KSERVICE_TABLE_DESCRIPTOR
+ KSERVICE_TABLE_DESCRIPTOR KeServiceDescriptorTable[4] = { { 0 } };
+ 
+ #define MAX_SERVICE_NAME 260
++#ifdef _WIN64
+ #define DEFAULT_SECURITY_COOKIE_64 (((ULONGLONG)0x00002b99 << 32) | 0x2ddfa232)
++#endif
+ #define DEFAULT_SECURITY_COOKIE_32 0xbb40e64e
+ #define DEFAULT_SECURITY_COOKIE_16 (DEFAULT_SECURITY_COOKIE_32 >> 16)
+ 
+-- 
+2.54.0
+

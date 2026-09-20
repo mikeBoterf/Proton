@@ -11,6 +11,9 @@ Wine branch: https://github.com/AstralDrift/wine/tree/wardogs-elytra-proton-comp
          forwarding, IRP security context / create disposition.
 - 0002 — padded in-place symmetric decryption fix (encrypted lighthouse driver).
 - 0003 — MmMapLockedPagesSpecifyCache.
+- 0004 — (ours) guard `DEFAULT_SECURITY_COOKIE_64` under `_WIN64` so the 32-bit
+         ntoskrnl build doesn't trip `-Werror=type-limits` in Proton's build.
+         0001 defined it unconditionally; fixes the i386 compile only.
 
 These are compatibility fixes that return REAL driver/crypto results — not an
 anti-cheat bypass. They advance the client to the lighthouse session-prime /

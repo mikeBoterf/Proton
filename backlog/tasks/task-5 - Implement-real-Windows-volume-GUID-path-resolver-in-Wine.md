@@ -4,6 +4,7 @@ title: Implement real Windows volume-GUID path resolver in Wine
 status: To Do
 assignee: []
 created_date: '2026-09-20 04:43'
+updated_date: '2026-09-20 20:45'
 labels:
   - wine
   - upstream
@@ -25,3 +26,9 @@ Resolve \\??\\Volume{GUID}\\... paths against each drive's volume serial (GUID l
 - [ ] #2 Elytra module install succeeds with the resolver and no symlink present
 - [ ] #3 Added as a numbered patch in nix/wine-patches/ with provenance + a test
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Note: WD-L014 root cause is bcrypt in-place decrypt (see TASK-9), separate from this volume-GUID resolver. Both are category (a).
+<!-- SECTION:NOTES:END -->

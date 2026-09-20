@@ -11,3 +11,8 @@
 /result
 /result-*
 /.direnv/
+
+# pre-fetched runtime blobs (see nix/README.md)
+/contrib/wine-gecko-*.tar.xz
+/contrib/wine-mono-*.tar.xz
+/contrib/xalia-*.zip

@@ -30,10 +30,10 @@
       ];
 
       shellHook = ''
-        echo "proton-wine-dev :: Wine build toolchain ready"
-        echo "  wine source : ./wine   (git submodule @ dc26e6184)"
-        echo "  reproducible : nix build .#wine-proton"
-        echo "  fast iterate : cd wine && ./configure --enable-archs=i386,x86_64 && make -j\$(nproc)"
+        echo "proton-wine-dev :: Wine build toolchain ready (see nix/README.md)"
+        echo "  ship (real Proton) : steam-run make redist build_name=wardogs-elytra"
+        echo "  patch compile-check: nix build .#wine-proton"
+        echo "  wine source        : ./wine  (submodule @ dc26e6184)"
       '';
     };
   };
