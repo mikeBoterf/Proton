@@ -6,3 +6,8 @@
 /.vagrant/
 /vagrant_share/
 /build/
+
+# Nix
+/result
+/result-*
+/.direnv/
