@@ -1,0 +1,97 @@
+From: Michael Boterf <michaelboterf@gmail.com>
+Subject: [PATCH 5/5] bcrypt: Match Windows invalid-padding semantics.
+
+Windows rejects malformed PKCS7 padding in BCryptDecrypt with STATUS_DATA_ERROR
+rather than STATUS_UNSUCCESSFUL, reports the claimed padding length in
+pcbResult, and still advances the vector to the final ciphertext block.
+
+Measured on Windows 10.0.26200.9457 via native bcrypt.dll, reproduced 16/16
+across three malformed padding forms (zero length, length 17, inconsistent
+bytes), the default and Microsoft Primitive providers, and both in-place and
+separate output buffers.  The status branch previously carried a FIXME.
+
+The failure-side pcbResult value is an observation from one Windows build
+rather than a documented contract; it is separable from the status and vector
+changes if that is preferred.
+
+diff --git a/dlls/bcrypt/bcrypt_main.c b/dlls/bcrypt/bcrypt_main.c
+index bab6c050cf6..69e99401b83 100644
+--- a/dlls/bcrypt/bcrypt_main.c
++++ b/dlls/bcrypt/bcrypt_main.c
+@@ -1395,17 +1395,27 @@ static NTSTATUS key_symmetric_decrypt( struct key *key, UCHAR *input, ULONG inpu
+     {
+         ULONG i;
+ 
++        /* Windows rejects malformed PKCS7 padding with STATUS_DATA_ERROR, not
++         * STATUS_UNSUCCESSFUL, and still reports the claimed padding length in
++         * *ret_len and advances the vector.  Measured on Windows 10.0.26200.9457
++         * across zero-length, over-long and inconsistent padding, for both the
++         * default and Microsoft Primitive Provider, in-place and separate
++         * buffers.  The failure-side *ret_len is an observation rather than a
++         * documented contract, but matching it keeps callers that inspect
++         * pcbResult on failure consistent with Windows. */
+         padding_len = decrypt_output[input_len - 1];
+         if (!padding_len || padding_len > key->u.s.block_size)
+         {
+-            status = STATUS_UNSUCCESSFUL;
+-            goto done;
++            if (padding_len <= *ret_len) *ret_len -= padding_len;
++            status = STATUS_DATA_ERROR;
++            goto update_vector;
+         }
+         for (i = 1; i <= padding_len; ++i)
+             if (decrypt_output[input_len - i] != padding_len)
+             {
+-                status = STATUS_UNSUCCESSFUL;
+-                goto done;
++                if (padding_len <= *ret_len) *ret_len -= padding_len;
++                status = STATUS_DATA_ERROR;
++                goto update_vector;
+             }
+         *ret_len -= padding_len;
+         if (output_len < *ret_len)
+@@ -1417,6 +1427,11 @@ static NTSTATUS key_symmetric_decrypt( struct key *key, UCHAR *input, ULONG inpu
+ 
+     if (allocated_output) memcpy( output, decrypt_output, *ret_len );
+ 
++    status = STATUS_SUCCESS;
++
++    /* The vector is advanced to the final ciphertext block on rejected padding
++     * as well as on success, matching the measured Windows behaviour. */
++update_vector:
+     if (key->u.s.vector)
+     {
+         if (input_len >= key->u.s.vector_len)
+@@ -1429,8 +1444,6 @@ static NTSTATUS key_symmetric_decrypt( struct key *key, UCHAR *input, ULONG inpu
+             FIXME( "Unexpected vector len %lu, *ret_len %lu.\n", key->u.s.vector_len, *ret_len );
+     }
+ 
+-    status = STATUS_SUCCESS;
+-
+ done:
+     free( allocated_output );
+     return status;
+diff --git a/dlls/bcrypt/tests/bcrypt.c b/dlls/bcrypt/tests/bcrypt.c
+index f9992123e1e..3aa1c81b841 100644
+--- a/dlls/bcrypt/tests/bcrypt.c
++++ b/dlls/bcrypt/tests/bcrypt.c
+@@ -1822,6 +1822,19 @@ static void test_BCryptDecrypt(void)
+     ok(size == 17, "in-place decrypt size %lu\n", size);
+     ok(!memcmp(plaintext, expected2, sizeof(expected2)), "in-place decrypt produced wrong data\n");
+ 
++    /* Malformed PKCS7 padding is rejected with STATUS_DATA_ERROR.  Corrupting the
++     * last byte of the penultimate ciphertext block flips the final plaintext
++     * byte through CBC; 0x0f (the real padding length here) becomes 0, which is
++     * not a legal padding length.  Windows still advances the vector to the final
++     * ciphertext block on this failure. */
++    size = 0;
++    memcpy(ivbuf, iv, sizeof(iv));
++    memcpy(plaintext, ciphertext2, sizeof(ciphertext2));
++    plaintext[15] ^= 0x0f;
++    ret = BCryptDecrypt(key, plaintext, 32, NULL, ivbuf, 16, plaintext, 32, &size, BCRYPT_BLOCK_PADDING);
++    ok(ret == STATUS_DATA_ERROR, "invalid padding got %#lx\n", ret);
++    ok(!memcmp(ivbuf, ciphertext2 + 32 - sizeof(iv), sizeof(iv)), "wrong iv data after invalid padding.\n");
++
+     size = 0;
+     memset(plaintext, 0, sizeof(plaintext));
+     ret = BCryptDecrypt(key, ciphertext2, 32, NULL, ivbuf, 16, plaintext, 17, &size, BCRYPT_BLOCK_PADDING);

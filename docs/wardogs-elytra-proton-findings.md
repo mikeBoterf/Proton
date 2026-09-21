@@ -8,10 +8,13 @@ never will be one from the client side (see *Scope & ethics*).
 
 > **Read alongside:**
 > [`wardogs-elytra-independent-review.md`](wardogs-elytra-independent-review.md)
-> — a separate investigation on different hardware that reproduces the same
-> progress but reaches a **different conclusion about the cause**, and critiques
-> some of the tests cited here. Where the two disagree, treat both as open.
-> Neither has a matched Windows baseline yet.
+> — a second investigation on different hardware, whose reading of the cause has
+> since been **confirmed** by a `+bcrypt` trace (see *Two competing readings*).
+> Where this document and that one disagreed, that one was right.
+> [`wardogs-elytra-postmortem.md`](wardogs-elytra-postmortem.md) records how the
+> wrong conclusion got as far as it did, and
+> [`wardogs-elytra-timeline.md`](wardogs-elytra-timeline.md) is a dated ledger of
+> every claim made and how each one resolved.
 
 ---
 
@@ -35,21 +38,26 @@ What the evidence supports:
   the driver loads and reaches its own logic.
 - The 52.7 MB `METHOD_BUFFERED` IOCTL is **delivered intact** to the driver (verified
   with a purpose-built test driver: driver-side hash == user-side hash).
-- Wine's AES-CBC in-place decrypt and ECDSA P-384 / SHA-384 **round-trip
-  self-consistently** at the relevant sizes (standalone tests in
-  `docs/elytra-diagnostics/`).
+- Wine's padded in-place AES-CBC decrypt handles **externally generated** (openssl)
+  ciphertext correctly at 48 bytes, and rejects malformed padding with the same
+  status Windows uses (`docs/elytra-diagnostics/`, `results/`).
 
-**Why it stops is not settled.** Two readings are live and they disagree — see
-*Two competing readings* below, and the companion review linked above, which argues
-the observed failure is a module-decryption error upstream of any environment check.
-Resolving this most likely requires a **matched trace from real Windows**, which
-nobody involved has yet.
+**Where it stops is now measured.** A `WINEDEBUG=+bcrypt` trace shows the driver's
+entire crypto sequence ending at a single padded, in-place `BCryptDecrypt` of
+55,275,056 bytes (`dwFlags = 0x1`). It then destroys the key and unloads — with **no
+signature verification and nothing downstream**. The failure is at module decryption,
+strictly before anything that could attest the environment.
 
-If the blocker does turn out to be environment attestation, the only legitimate
-unlock is **vendor-side** (Embark enabling a Linux/Proton enforcement tier for the
-title), as EAC/BattlEye did with Valve. Independent of which reading wins, this
-branch is a faithful reproducer of how far the real stack gets, and a possible
-foundation to *build on* if a Linux path is ever offered.
+That settles the disagreement between the two investigations in favour of the
+companion review. An earlier revision of this document claimed the residue was a
+direct kernel-authenticity check; **that claim is retracted** — the driver never runs
+far enough for it to apply.
+
+**Why the decrypt fails is still unknown**, and this document does not claim a root
+cause. Environment attestation may still exist as a *later* gate; it simply is not
+what produces `WD-L014` today. If it ever becomes the blocker, the only legitimate
+unlock remains vendor-side (Embark enabling a Linux/Proton tier), as EAC/BattlEye did
+with Valve.
 
 ---
 
@@ -171,15 +179,24 @@ the driver loads and reaches its own logic.
 The driver decrypts the `lighthouse` module and verifies signatures:
 - `BCryptOpenAlgorithmProvider("AES")` → `BCryptSetProperty("ChainingMode", "ChainingModeCBC")`
   → `BCryptGenerateSymmetricKey` (16-byte key) → **`BCryptDecrypt` in-place** (input ptr
-  == output ptr, 55,275,056 bytes, 16-byte IV).
+  == output ptr, 55,275,056 bytes, 16-byte IV, `BCRYPT_BLOCK_PADDING`).
 - `BCryptImportKeyPair("ECCPUBLICBLOB", 104 B = P-384)` → `BCryptVerifySignature`
   (SHA-384, 96-byte signature), repeatedly.
 
-> **Open question — the padding flag.** This document originally recorded the
-> `BCryptDecrypt` call as using **no padding**. The companion review reports the
-> retail driver passing **`BCRYPT_BLOCK_PADDING`**, and traces the failure to invalid
-> PKCS7 padding. These cannot both be right, and the answer likely decides which
-> reading below is correct. **Unresolved.**
+> **RESOLVED — the driver passes `BCRYPT_BLOCK_PADDING`.** Measured directly from a
+> `WINEDEBUG=+bcrypt` run against the patched build:
+>
+> ```
+> BCryptDecrypt 0xC221E0, 0xD20050, 55275056, (null), 0xC1F820, 16,
+>               0xD20050, 55275056, 0xC1F75C, 0x1
+> ```
+>
+> The final field is `dwFlags` = `0x1` = `BCRYPT_BLOCK_PADDING`. The same line
+> confirms the call is in-place (input pointer == output pointer == `0xD20050`) with
+> a 16-byte IV over 55,275,056 bytes (3,454,691 whole blocks).
+>
+> An earlier revision of this document recorded "no padding". **That was wrong.** The
+> companion review was right.
 
 Standalone tests (sources in `docs/elytra-diagnostics/`) under this exact Wine:
 - AES-CBC in-place decrypt round-trips at 48 B, 1 MB, and the full 52.7 MB.
@@ -206,10 +223,36 @@ The hash is computed independently on each side of the boundary, so this is the
 best-supported of the three tests: Wine's large-IOCTL marshaling is not truncating or
 corrupting the buffer.
 
-## Two competing readings
+## Two competing readings — now decided
 
-Both investigations see the same symptom — `STATUS_UNSUCCESSFUL` out of the driver's
-own handler, surfacing as `WD-L014`. They disagree on the cause.
+Both investigations saw the same symptom — `STATUS_UNSUCCESSFUL` out of the driver's
+own handler, surfacing as `WD-L014` — and disagreed on the cause. A `+bcrypt` trace
+of the full driver thread settles it.
+
+> **Reading B is the proximate cause. Reading A is eliminated as the immediate
+> explanation.** The complete BCrypt sequence on the driver's thread is:
+>
+> ```
+> BCryptOpenAlgorithmProvider  L"AES"
+> BCryptSetProperty            L"ChainingMode"   (32 bytes)
+> BCryptGetProperty            L"ObjectLength"
+> BCryptGenerateSymmetricKey   secret 16 B, object buffer 654 B
+>                              fixme: ignoring object buffer
+> BCryptDecrypt                55,275,056 B, in-place, flags 0x1
+> BCryptDestroyKey
+> BCryptCloseAlgorithmProvider
+> ```
+>
+> There is **no `BCryptImportKeyPair` and no `BCryptVerifySignature`**. The driver
+> tears down immediately after the decrypt and `NtUnloadDriver` follows. It never
+> reaches signature verification, so it never reaches anything that could attest the
+> kernel. Whatever `lighthouse` may check, the failure happens strictly before it.
+>
+> Still unknown: **why** the decrypt fails. `BCryptDecrypt` traces entry only, so the
+> return status is not in that log; the absence of downstream verification is strong
+> structural evidence, not a logged status.
+
+The two readings as originally stated:
 
 ### A — Environment attestation (the reading originally recorded here)
 *Argued by elimination.* If every input Wine provides is correct, what remains is
@@ -226,9 +269,10 @@ isn't a true-blue Windows NT kernel.* Not a spoof, not a Wine defect. **The only
 past it would be to fake the kernel itself, which is the forgery line we do not
 cross**, making this vendor-side by definition.
 
-**Weakness:** it is an argument from elimination, and it has not ruled out B. It also
-depends on the crypto being correct — which, per the test limits above, is not
-established to Windows-equivalent standards.
+**Outcome:** eliminated as the proximate cause. The driver never executes far enough
+to attest anything. A remains possible as a *further* gate that would be met if the
+decrypt were fixed — it has not been disproven, only shown not to be what produces
+WD-L014 today.
 
 ### B — Module decryption fails first (the companion review's reading)
 *Argued from an observed return value.* A filtered relay trace shows `BCryptDecrypt`
@@ -242,25 +286,73 @@ If B is right, the failure sits **upstream of any environment check** — the mo
 never decrypted, so `lighthouse` never ran to attest anything, and A's conclusion is
 premature.
 
-**Weakness:** it identifies where the failure surfaces but not *why* the padding is
-invalid. It is not yet a root cause either.
+**Outcome:** supported. The padded in-place call is confirmed, and the driver aborts
+at exactly that point. **Still not a root cause:** it identifies where the failure
+surfaces, not why the padding is invalid.
 
-### How to settle it
-- **What `dwFlags` does the retail driver actually pass to `BCryptDecrypt`?** This is
-  the crux and should be readable from existing relay traces.
-- **A matched trace from real Windows** of the same launcher and BuildID: the IOCTL
-  code and size, the BCrypt call parameters, and the return path at each layer. Both
-  investigations currently lack this. It is the single highest-value missing artifact.
+### What remains, and the plan
 
-Until one of those lands, this document does **not** claim a root cause.
+The `dwFlags` question is answered and reading A is eliminated as the proximate
+cause. Two further eliminations followed, both by direct measurement:
+
+- **The module data is identical to Windows.** All three cached Elytra CABs match the
+  Windows-measured hashes on size and SHA-256, including the 55,329,835-byte
+  `lighthouse` CAB. Linux did not fetch something different or corrupt.
+- **Wine's crypto is correct at the retail size and shape.** 55,275,056 bytes of
+  openssl-generated ciphertext, decrypted in-place with `BCRYPT_BLOCK_PADDING`:
+  status `0x0`, `pcbResult` 55,275,055, zero mismatched plaintext bytes. Exactly the
+  operation the driver performs. (Wine also reports `ObjectLength = 654` — precisely
+  the key-object size the driver allocates, so there is no mismatch there either.)
+
+That leaves a narrow box:
+
+```
+CAB 55,329,835 → [extract/decompress] → IOCTL 55,275,072 → [strip 16B IV] → BCrypt 55,275,056
+     ✅ identical to Windows                                                  ✅ cipher correct
+                        ↑________________ the defect is in here ________________↑
+```
+
+Given correct inputs Wine succeeds, and the driver fails — so what reaches
+`BCryptDecrypt` is not what should reach it. **The ciphertext, the key, or the IV is
+wrong by the time it arrives.**
+
+#### Plan
+
+1. **Observe the failure instead of inferring it** ([TASK-15](../backlog/tasks)).
+   `+bcrypt` traces entry only; the failure is still inferred from the driver aborting.
+   Add a targeted trace to the padding-validation branch of our own build logging the
+   observed padding length and status — nothing else — and ship it as `v3`. A wild
+   padding length means garbage plaintext; a plausible one means something subtler;
+   success would mean the current model is wrong and must be re-derived.
+2. **Localise the corruption** ([TASK-16](../backlog/tasks)). Extract
+   `lighthouse_driver.sys` from the CAB natively on Linux, outside Wine, and compare
+   its digest against the buffer that actually reaches the driver. The CAB is a plain
+   container and its payload stays encrypted throughout — this is an integrity check
+   on a copy, not an inspection of protected content.
+3. **Discriminate and fix** ([TASK-17](../backlog/tasks)). If the ciphertext differs,
+   the defect is in extraction, file I/O, the usermode→IOCTL copy, or
+   `MmMapLockedPagesSpecifyCache`; the first-divergence offset discriminates. If it
+   matches, the key or IV is mis-derived — and
+   `BCryptGenerateSymmetricKey ignoring object buffer` sits on exactly this sequence,
+   flagged three times and never examined.
+
+Throughout: digests and lengths of **ciphertext** only. The decrypted module is never
+logged or inspected. We are checking that bytes survive a copy, not learning what they
+mean.
+
+This document still does **not** claim a root cause. But the failure is now localised
+to a short, inspectable stretch of Wine, and looks like an ordinary bug rather than a
+wall.
 
 ---
 
 ## How this would work if Embark offered a Linux path
 
-*This section assumes reading A. It is the part of the analysis most contingent on
-the unresolved question above — if B holds, the immediate blocker is a decryption
-problem and the attestation question simply hasn't been reached yet.*
+*This section assumes reading A, which the trace has shown is **not** the current
+blocker — the driver fails at decryption and never reaches attestation. It is kept
+because it remains the right analysis **if** the decrypt is ever fixed and an
+attestation gate turns out to sit behind it. Treat it as contingency, not as a
+description of today's failure.*
 
 Granting A: a Windows kernel driver fundamentally cannot attest under Wine (no real
 kernel). A Linux path would then **not** be "make `lighthouse.sys` pass" — it would be
@@ -293,11 +385,12 @@ realism for Embark:
 ### Where this branch fits in
 It is a **faithful reproducer** and a possible **foundation**. It shows Proton can
 carry Elytra's real launcher / module / service / driver-load surface up to the IOCTL,
-and documents exactly what the driver exercises along the way. It does **not** yet
-pinpoint the remaining gap — that is the open question above. If Embark ever ships a
-Linux runtime (1) or enables a usermode/behavioral tier (2), the client-side plumbing
-this branch fixes is already in place. It **cannot** and is **not intended to** make
-the current kernel-driver tier pass.
+and documents exactly what the driver exercises along the way. It now also localises
+the failure precisely: one padded in-place `BCryptDecrypt`, with nothing downstream of
+it executed. What it does **not** establish is why that decrypt fails. If Embark ever
+ships a Linux runtime (1) or enables a usermode/behavioral tier (2), the client-side
+plumbing this branch fixes is already in place. It **cannot** and is **not intended
+to** make the current kernel-driver tier pass.
 
 ---
 

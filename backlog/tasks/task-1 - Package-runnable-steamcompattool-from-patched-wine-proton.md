@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@mboterf'
 created_date: '2026-09-20 04:43'
-updated_date: '2026-09-20 06:51'
+updated_date: '2026-09-21 04:27'
 labels:
   - nix
   - packaging
@@ -46,6 +46,20 @@ Build past configure+SDK image; make redist needs ALL submodules (gstreamer/gst-
 NixOS+Docker DNS gotcha: containers inherit systemd-resolved 127.0.0.53, cannot resolve hosts -> in-container downloads (piper fmt/spdlog/piper-phonemize) fail. Fix: configure with --docker-opts="--dns 1.1.1.1 --dns 8.8.8.8" (flows into DOCKER_BASE run). Also pre-fetch host-side gecko/mono/xalia blobs. Both documented in nix/README.md. Rebuild running.
 
 SUCCESS: 1.4G redist built at build/wardogs-elytra. Verified in shipped Wine: RtlStringFromGUIDEx exported, NtLoadDriver SCM present, ntoskrnl MmMapLockedPagesSpecifyCache, 32-bit ntoskrnl.exe built. Needed patch 0004 (_WIN64 guard) for Proton -Werror. Build recipe: steam-run + recursive submodules + pre-fetch contrib blobs + --docker-opts DNS. All in nix/README.md.
+
+2026-09-21: Packaged `wardogs-elytra-v2` as a second, independently selectable compatibility tool so iterations can be A/B'd against v1 without touching it.
+
+- Location: ~/.local/share/Steam/compatibilitytools.d/wardogs-elytra-v2
+- Internal name `wardogs-elytra-proton-v2`, display name 'wardogs-elytra v2 (bcrypt padding)'
+- Full copy (cp -a, ~1.4G), NOT hardlinked — verified distinct inodes, so writes to one cannot affect the other
+- Only files/lib/wine/x86_64-windows/bcrypt.dll and the default_pfx copy differ from v1
+- Provenance recorded in the tool dir as WARDOGS-V2-NOTES.txt
+
+Verified through the real tool path: padding-matrix exits 0, 16/16 Windows expectations met (results/padding-matrix-v2-tool.txt). v1 confirmed unmodified by hash after the operation.
+
+KNOWN GAP: only the 64-bit bcrypt.dll was rebuilt; files/lib/wine/i386-windows/bcrypt.dll is still v1's. Building the 32-bit PE needs a reconfigure with --enable-archs=i386,x86_64.
+
+Requires a Steam restart before the tool appears in the per-game compatibility dropdown.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

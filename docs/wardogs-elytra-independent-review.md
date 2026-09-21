@@ -7,12 +7,20 @@ This is a **second, independently conducted investigation** on different hardwar
 plus a review of the main findings document. It reproduces the same progress under
 patched Proton but reaches a **different conclusion about the cause**, and it
 identifies gaps in the crypto tests the main document relies on. Those critiques have
-been accepted and the main document has been revised accordingly; the root cause
-remains **unresolved between the two accounts**.
+been accepted and the main document has been revised accordingly.
 
-Neither investigation has a matched trace from real Windows. That is the artifact
-most likely to settle it. The narrower sub-question — what `dwFlags` the retail driver
-passes to `BCryptDecrypt` — is where the two documents directly contradict each other.
+**This document's reading has since been CONFIRMED.** A `WINEDEBUG=+bcrypt` trace of a
+real launch shows the retail driver calling `BCryptDecrypt` with `dwFlags = 0x1`
+(`BCRYPT_BLOCK_PADDING`) — exactly as claimed here, and contrary to the "no padding"
+recorded in the main findings document. The same trace shows the driver performing no
+signature verification at all after the decrypt, which eliminates the environment-
+attestation reading as the proximate cause of WD-L014. Details in *Two competing
+readings* in the main document and in backlog TASK-12.
+
+What remains unknown is **why** the decrypt fails. That is not answered by either
+document. See [`wardogs-elytra-timeline.md`](wardogs-elytra-timeline.md) for the full
+claim ledger and [`wardogs-elytra-postmortem.md`](wardogs-elytra-postmortem.md) for
+how the original conclusion survived as long as it did.
 
 The positive claims below (the relay trace, the diagnostic BCrypt build, the
 LibTomCrypt cross-check) rest on logs held locally and not published here; they should

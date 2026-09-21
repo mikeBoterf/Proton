@@ -4,7 +4,7 @@ title: Diagnose elytraldrfs DriverEntry / device-creation under Wine ntoskrnl
 status: Done
 assignee: []
 created_date: '2026-09-20 20:20'
-updated_date: '2026-09-20 20:56'
+updated_date: '2026-09-21 04:40'
 labels:
   - wine
   - driver
@@ -39,4 +39,16 @@ CRYPTO PRIMITIVES RULED OUT (standalone tests under patched wine, sources in rep
 CONCLUSIVE (test .sys, buftest): 52MB METHOD_BUFFERED IOCTL delivered BYTE-PERFECT to a driver (user hash == driver hash). Combined with AES-CBC + ECDSA both proven correct: EVERYTHING Wine provides to elytraldrfs is correct, yet its IOCTL returns STATUS_UNSUCCESSFUL. => VERDICT (b): the driver, given correct inputs, fails on its own kernel/environment verification under emulation. No honest client-side fix remains; resolving further = RE the anti-tamper driver (off-limits) or Embark enabling the Linux Elytra path. Proven by elimination, not assumed.
 
 CORRECTION (2026-09-20, after independent second reproduction — see docs/wardogs-elytra-independent-review.md): VERDICT (b) above is RETRACTED as premature. The "AES-CBC proven correct" step it rests on does not hold: bcrypt_inplace_test.c round-trips through the SAME Wine backend (self-consistency, not Windows-equivalence) and passes dwFlags=0, so it never exercises a padded decrypt. The second investigation's relay trace shows BCryptDecrypt ITSELF returning 0xc0000001 with a diagnostic build pointing at invalid PKCS7 padding, and reports the retail driver passing BCRYPT_BLOCK_PADDING — contradicting the "NO padding" observation recorded in the +bcrypt entry above. NOTE: that earlier +bcrypt entry independently reached category (a) "Wine produced wrong plaintext" before the crypto tests moved it to (b); if those tests were inadequate, the original (a) instinct may have been right. OPEN and blocking: (1) what dwFlags does the retail BCryptDecrypt call actually receive — re-read the relay trace; (2) matched Windows baseline, same launcher+BuildID. Do not report a root cause upstream until one of these lands.
+
+SCOPE CLARIFICATION (2026-09-20): AC#1 and AC#2 stand — the trace was captured and the determination 'DriverEntry ran, driver refused' is still supported. AC#3 is UNCHECKED because the 'document as vendor-gated' output was the retracted verdict (b). The titled scope (DriverEntry / device creation) is resolved: the driver loads, creates its device, and registers MajorFunctions correctly. What remains open is why its IOCTL handler refuses, which has moved to TASK-13. Conformance work split out to TASK-10 / TASK-11 / TASK-12; shortcomings write-up is TASK-14.
+
+REFERENCE FIX: the preceding note cited provisional IDs. Correct successors are TASK-10 (BCrypt invalid-padding conformance), TASK-11 (crypto test gaps), TASK-12 (root cause: why the Linux inputs have invalid padding), TASK-13 (shortcomings postmortem), TASK-14 (upstream to WineHQ).
+
+FINAL (2026-09-21, measured): the `NO padding` recorded in the +bcrypt entry above is WRONG. A WINEDEBUG=+bcrypt trace of a real launch shows dwFlags = 0x1 = BCRYPT_BLOCK_PADDING (steam-1867240.log:283). The flag was misread from the original trace.
+
+The same trace shows the driver's complete thread ending at the decrypt with NO BCryptImportKeyPair and NO BCryptVerifySignature. So the ECDSA-verify step described in that entry never executes either — the driver aborts at decryption.
+
+AC#3 is now checked, satisfied by the (a) branch rather than (b): the failure is localised to module decryption and documented as such in docs/wardogs-elytra-proton-findings.md. Verdict (b) 'vendor-gated attestation' stays RETRACTED — eliminated as the proximate cause, not merely unproven.
+
+Closing this task. Root-cause work continues in TASK-12; the claim ledger is docs/wardogs-elytra-timeline.md; the method postmortem is docs/wardogs-elytra-postmortem.md.
 <!-- SECTION:NOTES:END -->

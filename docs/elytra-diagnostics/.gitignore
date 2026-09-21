@@ -1,0 +1,6 @@
+# build + run artifacts; sources, fixtures and results/ are tracked
+*.exe
+*.sys
+padding-matrix.txt
+bcrypt-inplace.txt
+large-padded-test.txt

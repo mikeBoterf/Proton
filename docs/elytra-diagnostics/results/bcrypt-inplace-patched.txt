@@ -1,0 +1,11 @@
+Wine BCrypt in-place AES decrypt round-trip test
+ (self-consistency only - same backend both directions)
+  [AES-CBC 48B] len=48  IN-PLACE round-trip: PASS
+  [AES-CBC 1MB] len=1048576  IN-PLACE round-trip: PASS
+  [AES-CBC 52MB] len=55275056  IN-PLACE round-trip: PASS
+  [AES-CFB 1MB] len=1048576  IN-PLACE round-trip: PASS
+  [AES-ECB 1MB] len=1048576  IN-PLACE round-trip: PASS
+Padded decrypt against externally generated fixtures
+  [valid PKCS7] status=0 (want 0) len=47 : PASS
+  [invalid PKCS7] status=0xc000003e (want 0xc000003e) len=48 : PASS
+0 failure(s)

@@ -1,0 +1,6 @@
+ObjectLength reported by Wine = 654
+status    = 0 (want 0x0)
+pcbResult = 55275055 (want 55275055)
+plaintext mismatched bytes = 0 of 55275055
+iv advanced to last ciphertext block = 1
+RESULT: PASS

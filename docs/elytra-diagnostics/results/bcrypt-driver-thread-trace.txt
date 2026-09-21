@@ -1,0 +1,41 @@
+# Driver-thread BCrypt sequence, captured from a real WARDOGS launch
+#
+# Capture:  Steam launch options `PROTON_LOG=1 WINEDEBUG=+bcrypt %command%`
+# Build:    wardogs-elytra-v2 (patches 0001-0005)
+# Source:   ~/steam-1867240.log, thread 01e8 (the elytraldrfs driver)
+# Result:   WD-L014-33c51c88410b
+#
+# Contains pointer values and buffer sizes only. No key, IV, plaintext or
+# ciphertext bytes are logged by this channel.
+#
+# BCryptDecrypt TRACE argument order (dlls/bcrypt/bcrypt_main.c:2462):
+#   handle, input, input_len, padding, iv, iv_len, output, output_len, ret_len, flags
+#
+# Reading the decrypt line below:
+#   input == output == 0xD20050   -> in-place
+#   input_len == output_len == 55,275,056 -> 3,454,691 whole AES blocks
+#   iv_len 16
+#   flags 0x1 == BCRYPT_BLOCK_PADDING   <-- settles the padding-flag question
+#
+# Note what is ABSENT: no BCryptImportKeyPair, no BCryptVerifySignature.
+# The driver tears down immediately after the decrypt; NtUnloadDriver follows.
+# The failure is at module decryption, before anything that could attest the
+# environment.
+
+01e8:trace:bcrypt:BCryptOpenAlgorithmProvider 0000000000C1F770, L"AES", (null), 0
+01e8:trace:bcrypt:BCryptOpenAlgorithmProvider returning handle 000000000003FA10
+01e8:trace:bcrypt:BCryptSetProperty 000000000003FA10, L"ChainingMode", 000000010030FCEA, 32, 0
+01e8:trace:bcrypt:BCryptGetProperty 000000000003FA10, L"ObjectLength", 0000000000C1F76C, 4, 0000000000C1F768, 0
+01e8:trace:bcrypt:BCryptGenerateSymmetricKey 000000000003FA10, 0000000000C1F760, 0000000000C1F4C0, 654, 0000000000C1F810, 16, 0
+01e8:fixme:bcrypt:BCryptGenerateSymmetricKey ignoring object buffer
+01e8:trace:bcrypt:BCryptGenerateSymmetricKey returning handle 0000000000C221E0
+01e8:trace:bcrypt:BCryptDecrypt 0000000000C221E0, 0000000000D20050, 55275056, 0000000000000000, 0000000000C1F820, 16, 0000000000D20050, 55275056, 0000000000C1F75C, 0x1
+01e8:warn:bcrypt:get_gnutls_cipher handle block size
+01e8:trace:bcrypt:BCryptDestroyKey 0000000000C221E0
+01e8:trace:bcrypt:BCryptCloseAlgorithmProvider 000000000003FA10, 0
+
+# --- immediately following, on the service thread 01a0 ---
+01a0:fixme:advapi:ReportEventW (00000000CAFE4242,0x0004,0x0000,0x40000003,0000000000000000,0x0001,0x00000000,0000000001AEEDD8,0000000000000000): stub
+01a0:fixme:advapi:ReportEventW (00000000CAFE4242,0x0004,0x0000,0x40000004,0000000000000000,0x0001,0x00000000,0000000001AEEDD8,0000000000000000): stub
+01a0:fixme:advapi:ReportEventW (00000000CAFE4242,0x0004,0x0000,0x40000004,0000000000000000,0x0001,0x00000000,0000000001AEE9D8,0000000000000000): stub
+01a0:fixme:advapi:ReportEventW (00000000CAFE4242,0x0004,0x0000,0x40000004,0000000000000000,0x0001,0x00000000,0000000001AEEDD8,0000000000000000): stub

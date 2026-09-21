@@ -1,0 +1,16 @@
+valid-small provider=default inplace=1 setup=PASS status=0x00000000 output=47 expected_windows_semantics=PASS final_iv_matches=1 input_unchanged=0
+invalid-zero-length provider=default inplace=1 setup=PASS status=0xc000003e output=48 expected_windows_semantics=PASS final_iv_matches=1 input_unchanged=0
+invalid-length-17 provider=default inplace=1 setup=PASS status=0xc000003e output=31 expected_windows_semantics=PASS final_iv_matches=1 input_unchanged=0
+invalid-inconsistent-bytes provider=default inplace=1 setup=PASS status=0xc000003e output=46 expected_windows_semantics=PASS final_iv_matches=1 input_unchanged=0
+valid-small provider=default inplace=0 setup=PASS status=0x00000000 output=47 expected_windows_semantics=PASS final_iv_matches=1 input_unchanged=1
+invalid-zero-length provider=default inplace=0 setup=PASS status=0xc000003e output=48 expected_windows_semantics=PASS final_iv_matches=1 input_unchanged=1
+invalid-length-17 provider=default inplace=0 setup=PASS status=0xc000003e output=31 expected_windows_semantics=PASS final_iv_matches=1 input_unchanged=1
+invalid-inconsistent-bytes provider=default inplace=0 setup=PASS status=0xc000003e output=46 expected_windows_semantics=PASS final_iv_matches=1 input_unchanged=1
+valid-small provider=MicrosoftPrimitiveProvider inplace=1 setup=PASS status=0x00000000 output=47 expected_windows_semantics=PASS final_iv_matches=1 input_unchanged=0
+invalid-zero-length provider=MicrosoftPrimitiveProvider inplace=1 setup=PASS status=0xc000003e output=48 expected_windows_semantics=PASS final_iv_matches=1 input_unchanged=0
+invalid-length-17 provider=MicrosoftPrimitiveProvider inplace=1 setup=PASS status=0xc000003e output=31 expected_windows_semantics=PASS final_iv_matches=1 input_unchanged=0
+invalid-inconsistent-bytes provider=MicrosoftPrimitiveProvider inplace=1 setup=PASS status=0xc000003e output=46 expected_windows_semantics=PASS final_iv_matches=1 input_unchanged=0
+valid-small provider=MicrosoftPrimitiveProvider inplace=0 setup=PASS status=0x00000000 output=47 expected_windows_semantics=PASS final_iv_matches=1 input_unchanged=1
+invalid-zero-length provider=MicrosoftPrimitiveProvider inplace=0 setup=PASS status=0xc000003e output=48 expected_windows_semantics=PASS final_iv_matches=1 input_unchanged=1
+invalid-length-17 provider=MicrosoftPrimitiveProvider inplace=0 setup=PASS status=0xc000003e output=31 expected_windows_semantics=PASS final_iv_matches=1 input_unchanged=1
+invalid-inconsistent-bytes provider=MicrosoftPrimitiveProvider inplace=0 setup=PASS status=0xc000003e output=46 expected_windows_semantics=PASS final_iv_matches=1 input_unchanged=1
