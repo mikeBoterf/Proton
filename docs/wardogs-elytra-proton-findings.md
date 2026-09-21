@@ -6,32 +6,50 @@ never will be one from the client side (see *Scope & ethics*).
 **Anti-cheat:** Elytra Anti-Cheat Framework (Vaiiya Corporate Limited / Embark).
 **Base:** Valve Wine `proton_11.0` @ `dc26e6184` + a small patch series (below).
 
+> **Read alongside:**
+> [`wardogs-elytra-independent-review.md`](wardogs-elytra-independent-review.md)
+> — a separate investigation on different hardware that reproduces the same
+> progress but reaches a **different conclusion about the cause**, and critiques
+> some of the tests cited here. Where the two disagree, treat both as open.
+> Neither has a matched Windows baseline yet.
+
 ---
 
 ## TL;DR
 
 With four Wine patches, a stock-built Proton runs Elytra's **real, unmodified**
-launcher and driver stack on Linux **all the way to the server heartbeat** — the
-game launches, joins a live match, and plays for ~60 s before the server kicks with
-`no valid heartbeat within window`. We then isolated *exactly* why, by elimination:
+launcher and driver stack considerably further than stock Proton: modules install,
+`elytraldrfs_driver.sys` loads, creates its device, and receives its 52.7 MB IOCTL.
+It then stops — the driver's own handler returns `STATUS_UNSUCCESSFUL`, surfacing as
+**`WD-L014`**.
 
-- Every Windows kernel API Elytra's loader calls is **serviced correctly** by Wine.
-- The crypto it uses (AES-128-CBC in-place decrypt, ECDSA P-384 / SHA-384 verify) is
-  **bit-for-bit correct** under Wine (verified with standalone tests).
-- The 52.7 MB `METHOD_BUFFERED` IOCTL is **delivered byte-perfect** to the driver
-  (verified with a purpose-built test driver).
+**No successful normal launch or multiplayer session has been achieved on this
+path.** (A separate community *launcher-bypass* does reach a live match and gets
+kicked at ~60 s on `no valid heartbeat within window` — but that path skips Elytra's
+launcher entirely and does **not** exercise these patches. Earlier revisions of this
+document blurred the two; see *How far it runs*.)
 
-Yet the driver returns `STATUS_UNSUCCESSFUL`. The residue is **not a Wine bug and not
-anything the client can honestly change**: after decrypting its module correctly,
-Elytra's `lighthouse` component inspects the *running kernel* directly to attest a
-genuine, unmodified ring-0 NT kernel — and Wine has no real kernel (its `ntoskrnl`
-is a userspace reimplementation), so the check honestly fails. There is nothing wrong
-to fix; the environment simply isn't a Windows kernel, and Elytra correctly says so.
+What the evidence supports:
 
-**The only legitimate unlock is vendor-side** (Embark enabling a Linux/Proton
-enforcement tier for the title), exactly as EAC/BattlEye did with Valve. This branch
-is a faithful reproducer of the gap and a possible foundation to *build on* if that
-path is ever offered.
+- Every Windows kernel API Elytra's loader calls appears to be **serviced** by Wine —
+  the driver loads and reaches its own logic.
+- The 52.7 MB `METHOD_BUFFERED` IOCTL is **delivered intact** to the driver (verified
+  with a purpose-built test driver: driver-side hash == user-side hash).
+- Wine's AES-CBC in-place decrypt and ECDSA P-384 / SHA-384 **round-trip
+  self-consistently** at the relevant sizes (standalone tests in
+  `docs/elytra-diagnostics/`).
+
+**Why it stops is not settled.** Two readings are live and they disagree — see
+*Two competing readings* below, and the companion review linked above, which argues
+the observed failure is a module-decryption error upstream of any environment check.
+Resolving this most likely requires a **matched trace from real Windows**, which
+nobody involved has yet.
+
+If the blocker does turn out to be environment attestation, the only legitimate
+unlock is **vendor-side** (Embark enabling a Linux/Proton enforcement tier for the
+title), as EAC/BattlEye did with Valve. Independent of which reading wins, this
+branch is a faithful reproducer of how far the real stack gets, and a possible
+foundation to *build on* if a Linux path is ever offered.
 
 ---
 
@@ -127,12 +145,12 @@ patched launcher genuinely running Elytra.)
 
 ---
 
-## The exact failure — which items call the Wine kernel handlers
+## Where it stops — what the driver exercises
 
-This is the heart of it: **everything Elytra asks the Windows kernel is handled
-correctly by Wine.** The failure is not in what Wine returns; it is that the driver,
-having received correct answers, then verifies the *nature of the kernel itself* and
-correctly finds it is not a genuine ring-0 NT kernel.
+What follows is what the driver is observed to *do* before it fails. The kernel-API
+surface below is serviced by Wine well enough for the driver to load and reach its
+own logic; that much is directly observable in the traces. What it does **not**
+establish on its own is *why* the driver then refuses — see *Two competing readings*.
 
 ### The IOCTL that fails
 `elytraldrfs` device-control code **`0x222014`** = `FILE_DEVICE_UNKNOWN` (0x22),
@@ -149,46 +167,105 @@ spinlock + critical-region primitives, `ExAllocatePool2`, IRP alloc/init/complet
 These are standard loader/device/IRP calls; **Wine handles them all**, which is why
 the driver loads and reaches its own logic.
 
-### The crypto it performs inside the IOCTL — proven correct under Wine
+### The crypto it performs inside the IOCTL — and what our tests do and don't show
 The driver decrypts the `lighthouse` module and verifies signatures:
 - `BCryptOpenAlgorithmProvider("AES")` → `BCryptSetProperty("ChainingMode", "ChainingModeCBC")`
   → `BCryptGenerateSymmetricKey` (16-byte key) → **`BCryptDecrypt` in-place** (input ptr
-  == output ptr, 55,275,056 bytes, 16-byte IV, no padding).
+  == output ptr, 55,275,056 bytes, 16-byte IV).
 - `BCryptImportKeyPair("ECCPUBLICBLOB", 104 B = P-384)` → `BCryptVerifySignature`
   (SHA-384, 96-byte signature), repeatedly.
 
+> **Open question — the padding flag.** This document originally recorded the
+> `BCryptDecrypt` call as using **no padding**. The companion review reports the
+> retail driver passing **`BCRYPT_BLOCK_PADDING`**, and traces the failure to invalid
+> PKCS7 padding. These cannot both be right, and the answer likely decides which
+> reading below is correct. **Unresolved.**
+
 Standalone tests (sources in `docs/elytra-diagnostics/`) under this exact Wine:
-- **AES-CBC in-place decrypt round-trips correctly** at 48 B, 1 MB, and the full 52.7 MB.
-- **ECDSA P-384 / SHA-384 verify** passes valid signatures and rejects corrupted ones.
+- AES-CBC in-place decrypt round-trips at 48 B, 1 MB, and the full 52.7 MB.
+- ECDSA P-384 / SHA-384 verify passes valid signatures and rejects corrupted ones.
 
-### The buffer delivery — proven byte-perfect
+**Limits of those tests** (fairly raised by the companion review — verify against
+`bcrypt_inplace_test.c` yourself):
+- They encrypt *and* decrypt through the same Wine backend, so they demonstrate
+  **self-consistency, not equivalence to Windows**. An implementation wrong in a
+  symmetric way would still pass. Calling this "bit-for-bit correct" — as earlier
+  revisions did — overstated it.
+- They pass `dwFlags = 0`, so they **do not exercise the padded path** at all. If the
+  retail call is padded, these tests miss the failing branch entirely.
+- `main()` returns `0` unconditionally and discards each `test_mode` result, so the
+  exit code carries no signal; read the printed PASS/FAIL lines.
+
+Closing those gaps — externally generated fixtures, an exact-size padded in-place
+case, and a negative padding test — is the most valuable next step on the Linux side.
+
+### The buffer delivery — delivered intact
 A minimal test kernel driver that FNV-hashes a large `METHOD_BUFFERED` IOCTL input
-received the full **55,275,056 bytes intact** (driver-side hash == user-side hash). So
-Wine's large-IOCTL marshaling is not truncating or corrupting anything.
+received the full **55,275,056 bytes intact** (driver-side hash == user-side hash).
+The hash is computed independently on each side of the boundary, so this is the
+best-supported of the three tests: Wine's large-IOCTL marshaling is not truncating or
+corrupting the buffer.
 
-### Therefore: the residue is a direct kernel-authenticity check
-Every input Wine provides is correct; the driver still returns `STATUS_UNSUCCESSFUL`.
-By elimination, the failure is `lighthouse`'s **own environment verification**: a
-kernel anti-cheat attests authenticity by **reading kernel memory/structures
-directly** (module lists, kernel image, page state, CPU/hypervisor signals) — *not* via
-API calls we can service. Under Wine there is **no real kernel**: `ntoskrnl` is a
-userspace reimplementation hosted in `winedevice.exe`, with no ring-0, no genuine
-kernel structures, no hardware root of trust. So the check honestly evaluates to
-"this is not a genuine NT kernel," and the driver refuses.
+## Two competing readings
 
-Put plainly, in the requester's words: *it's running — it just doesn't know what to
-make of a kernel that isn't a true-blue Windows NT kernel.* Not a spoof, not a Wine
-defect — an environment the driver was never built to accept, returning an honest
-failure. **The only way past it is to fake the kernel itself, which is the forgery
-line we do not cross.**
+Both investigations see the same symptom — `STATUS_UNSUCCESSFUL` out of the driver's
+own handler, surfacing as `WD-L014`. They disagree on the cause.
+
+### A — Environment attestation (the reading originally recorded here)
+*Argued by elimination.* If every input Wine provides is correct, what remains is
+`lighthouse`'s **own environment verification**: kernel anti-cheats attest by reading
+kernel memory and structures directly (module lists, kernel image, page state,
+CPU/hypervisor signals) — *not* via API calls we can service. Under Wine there is no
+real kernel; `ntoskrnl` is a userspace reimplementation hosted in `winedevice.exe`,
+with no ring-0, no genuine kernel structures, no hardware root of trust. The check
+would then honestly evaluate to "this is not a genuine NT kernel" and the driver
+would refuse.
+
+If A is right: *it's running — it just doesn't know what to make of a kernel that
+isn't a true-blue Windows NT kernel.* Not a spoof, not a Wine defect. **The only way
+past it would be to fake the kernel itself, which is the forgery line we do not
+cross**, making this vendor-side by definition.
+
+**Weakness:** it is an argument from elimination, and it has not ruled out B. It also
+depends on the crypto being correct — which, per the test limits above, is not
+established to Windows-equivalent standards.
+
+### B — Module decryption fails first (the companion review's reading)
+*Argued from an observed return value.* A filtered relay trace shows `BCryptDecrypt`
+itself returning `0xc0000001` before the driver propagates the same status, and a
+diagnostic BCrypt build points at **invalid PKCS7 padding** as the failing branch. A
+second AES implementation (LibTomCrypt) reportedly agrees with the GnuTLS backend on
+the failing final block, which would push the problem toward the *inputs* or upstream
+context rather than backend arithmetic.
+
+If B is right, the failure sits **upstream of any environment check** — the module
+never decrypted, so `lighthouse` never ran to attest anything, and A's conclusion is
+premature.
+
+**Weakness:** it identifies where the failure surfaces but not *why* the padding is
+invalid. It is not yet a root cause either.
+
+### How to settle it
+- **What `dwFlags` does the retail driver actually pass to `BCryptDecrypt`?** This is
+  the crux and should be readable from existing relay traces.
+- **A matched trace from real Windows** of the same launcher and BuildID: the IOCTL
+  code and size, the BCrypt call parameters, and the return path at each layer. Both
+  investigations currently lack this. It is the single highest-value missing artifact.
+
+Until one of those lands, this document does **not** claim a root cause.
 
 ---
 
 ## How this would work if Embark offered a Linux path
 
-A Windows kernel driver fundamentally cannot attest under Wine (no real kernel). So a
-Linux path is **not** "make `lighthouse.sys` pass" — it is a different, vendor-owned
-enforcement tier. Three shapes, in increasing order of realism for Embark:
+*This section assumes reading A. It is the part of the analysis most contingent on
+the unresolved question above — if B holds, the immediate blocker is a decryption
+problem and the attestation question simply hasn't been reached yet.*
+
+Granting A: a Windows kernel driver fundamentally cannot attest under Wine (no real
+kernel). A Linux path would then **not** be "make `lighthouse.sys` pass" — it would be
+a different, vendor-owned enforcement tier. Three shapes, in increasing order of
+realism for Embark:
 
 1. **Native Linux runtime + Proton bridge (the EAC/BattlEye model).** Proton already
    ships `eac-bridge` and `battleye-bridge` — thin shims that forward a game's
@@ -214,13 +291,13 @@ enforcement tier. Three shapes, in increasing order of realism for Embark:
    kernels), so it scales poorly. This is precisely why Embark chose behavioral (2).
 
 ### Where this branch fits in
-It is a **faithful reproducer** and a **foundation**. It proves Proton can carry
-Elytra's real launcher/module/service/driver-load surface end-to-end and pinpoints the
-single remaining gap (the kernel-authenticity check). If Embark ever ships a Linux
-runtime (1) or enables a usermode/behavioral tier (2), the client-side plumbing this
-branch fixes is already in place, and the traces here document exactly what the driver
-exercises. It **cannot** and is **not intended to** make the current kernel-driver tier
-pass.
+It is a **faithful reproducer** and a possible **foundation**. It shows Proton can
+carry Elytra's real launcher / module / service / driver-load surface up to the IOCTL,
+and documents exactly what the driver exercises along the way. It does **not** yet
+pinpoint the remaining gap — that is the open question above. If Embark ever ships a
+Linux runtime (1) or enables a usermode/behavioral tier (2), the client-side plumbing
+this branch fixes is already in place. It **cannot** and is **not intended to** make
+the current kernel-driver tier pass.
 
 ---
 
@@ -240,10 +317,18 @@ investigation; they are large and kept out of the repo.
 
 ## Remaining, in-bounds work
 
-- **Report to the vendor.** The constructive ask to Embark / Valve
-  ([ValveSoftware/Proton#10113](https://github.com/ValveSoftware/Proton/issues/10113)):
-  *"Proton runs your real driver to the lighthouse heartbeat; here is the precise gap;
-  please enable a Proton/usermode tier for WARDOGS as for The Finals."*
+- **Settle the padding-flag question** (above) from existing relay traces, then
+  reconcile the two documents into a single account.
+- **Obtain a matched Windows baseline** — same launcher and BuildID, capturing the
+  BCrypt call parameters and the return path. This is the blocking artifact.
+- **Close the crypto test gaps:** externally generated fixtures, an exact-size padded
+  in-place decrypt, a negative padding case, and a meaningful exit code.
+- **Report to the vendor** — *once a cause is actually established.* The constructive
+  ask to Embark / Valve
+  ([ValveSoftware/Proton#10113](https://github.com/ValveSoftware/Proton/issues/10113),
+  [#10163](https://github.com/ValveSoftware/Proton/issues/10163)) is for a
+  Proton/usermode tier for WARDOGS as for The Finals — but reporting a *specific*
+  root cause before it is nailed down would be worse than reporting nothing.
 - **Upstreamable Wine fix:** a real `\??\Volume{GUID}` resolver (resolve the GUID
   against each drive's volume serial) to replace the `dosdevices` symlink workaround —
   useful to *every* Windows app that uses volume-GUID paths, independent of Elytra.
